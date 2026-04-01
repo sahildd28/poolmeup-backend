@@ -1,35 +1,58 @@
 import os
-from pydantic import BaseModel
-from fastapi import HTTPException,status
+from fastapi import Depends, HTTPException,status
 from pwdlib import PasswordHash
-from fastapi.security import OAuth2PasswordRequestForm 
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm 
 import logging
 from sqlalchemy import text
-from config.database_helper import get_connections
+from app.config.database_helper import get_connections
 from datetime import datetime
+from app.model.authModel import User, UserResponse
+import jwt
+from datetime import datetime, timedelta, timezone
 
 SECRET_KEY = os.getenv('SECRET_KEY')
-ALGOTIRHM = os.getenv('ALGOTIRHM')
-ACCESS_TOKEN_EXPIRE_MINUTES = os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES')
+ALGORITHM = os.getenv('ALGORITHM')
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES'))
 
 password_hash = PasswordHash.recommended()
 hash = password_hash.hash("123")
 
-class User(BaseModel):
-    username:str
-    password:str
+oauth_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-class SignUpForm(BaseModel):
-    user:User
-    signUpMethod:str
+def create_token_data(data:OAuth2PasswordRequestForm) -> dict:
+    return dict(
+        sub=data.username,
+        iss='poolmeup_backend',
+        aud='poolmeup_api',
+        iat = int(datetime.now(timezone.utc).timestamp()),
+        exp = int((datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp())
+    )
 
-class LoginForm(BaseModel):
-    username:str
-    password:str | None = None
 
-class UserResponse(BaseModel):
-    id: int
-    username: str
+def create_access_token(data: dict ) -> str :    
+    access_token = jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+    return access_token
+
+async def get_current_user(token: str = Depends(oauth_scheme)): 
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    ) 
+    payload_data =  jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],options={"verify_aud": False})
+    
+    username: str = payload_data.get("sub")
+
+    if username is None:
+        raise credentials_exception
+    
+    user : UserResponse = getUserByUsername(username)
+
+    if not user:
+        raise credentials_exception
+    
+    return user
+
 
 def verify_password(plain_password, hashed_password):
     return password_hash.verify(plain_password, hashed_password)
@@ -45,14 +68,15 @@ def insertUser(user: User) -> UserResponse:
         with engine.connect() as conn:
             result = conn.execute(
                 text("""
-                    INSERT INTO user_details (username, password_hash, create_date)
-                    VALUES (:username, :password_hash, :create_date)
+                    INSERT INTO user_details (username, password_hash, create_date, role)
+                    VALUES (:username, :password_hash, :create_date, :role)
                     RETURNING id, username
                 """),
                 {
                     "username": user.username,
                     "password_hash": hashed_password,
-                    "create_date" : datetime.now()               
+                    "create_date" : datetime.now(),
+                    "role" : "user"              
                 }
             ).fetchone()
 
@@ -79,16 +103,16 @@ def getUserByUsername(username: str) -> UserResponse:
         engine = get_connections()
 
         with engine.connect() as conn:
-            result =conn.execute( text("""SELECT id, username from user_details where username = :username"""),
+            result =conn.execute( text("""SELECT id, username, password_hash from user_details where username = :username"""),
             {
                 "username" : username
             }
-            ).fetchone()
-
+            ).fetchone()          
             if result:
                 return UserResponse(
                     id=result.id,
-                    username=result.username
+                    username=result.username,
+                    password_hash=result.password_hash
                 )           
           
     except HTTPException as e:
@@ -99,4 +123,12 @@ def getUserByUsername(username: str) -> UserResponse:
 
 
 def authenticate_user(loginDetails :OAuth2PasswordRequestForm ) -> UserResponse | None:
-    return getUserByUsername(loginDetails.username)
+    
+    user: UserResponse = getUserByUsername(loginDetails.username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail="User not found")
+
+    if not verify_password(loginDetails.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail="Invalid credentials")
+    
+    return user

@@ -1,13 +1,14 @@
 from datetime import datetime
 from typing import List,Optional
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey 
 from sqlalchemy import func
 from sqlalchemy import Integer
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
+
 
 
 class Base(DeclarativeBase):
@@ -21,8 +22,8 @@ class User(Base):
     username: Mapped[str]
     password_hash: Mapped[str]
     create_date: Mapped[Optional[datetime]] = mapped_column(insert_default=func.now())
+    roles: Mapped[str]
     signupoptions: Mapped[List["signupoptions"]] = relationship(back_populates="user_details")
-
 
 class signupoptions(Base):
     __tablename__ = "signupoptions"

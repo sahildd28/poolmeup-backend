@@ -3,7 +3,7 @@ import os,logging
 from dotenv import load_dotenv
 from sqlalchemy.engine.url import make_url 
 import logging
-from entity.auth_entity import Base  
+from app.entity.auth_entity import Base  
 from typing import Optional
 from sqlalchemy import create_engine,text
 
